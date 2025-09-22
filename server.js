@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import ical from "ical";
+import ical from "node-ical";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -34,7 +34,9 @@ app.get("/busy.ics", async (req, res) => {
     }
 
     const icsData = await response.text();
-    const events = ical.parseICS(icsData);
+    
+    // Parse with node-ical to handle recurring events
+    const events = await ical.async.parseICS(icsData);
 
     // Build new ICS with only busy blocks
     let busyIcs = "";
@@ -48,51 +50,67 @@ app.get("/busy.ics", async (req, res) => {
 
     const now = new Date();
     const eightWeeksFromNow = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
-
+    
     let eventCount = 0;
+    let busyBlocks = [];
+
+    // Process all events including recurring ones
     for (const [key, event] of Object.entries(events)) {
-      if (event.type === 'VEVENT' && event.start) {
-        const startDate = new Date(event.start);
-        const endDate = new Date(event.end || event.start);
-        
-        // Skip past events
-        if (endDate < now) {
-          continue;
+      if (event.type === 'VEVENT') {
+        // Handle recurring events
+        if (event.rrule) {
+          try {
+            const dates = event.rrule.between(now, eightWeeksFromNow, true);
+            
+            for (const date of dates) {
+              const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
+              const startDate = new Date(date);
+              const endDate = new Date(date.getTime() + duration);
+              
+              busyBlocks.push({
+                start: startDate,
+                end: endDate,
+                uid: `${key}-${startDate.getTime()}`
+              });
+            }
+          } catch (e) {
+            console.error('Error processing recurring event:', e);
+          }
+        } else if (event.start) {
+          // Regular single event
+          const startDate = new Date(event.start);
+          const endDate = new Date(event.end || event.start);
+          
+          // Only include if within our time window
+          if (endDate > now && startDate < eightWeeksFromNow) {
+            busyBlocks.push({
+              start: startDate,
+              end: endDate,
+              uid: key
+            });
+          }
         }
-        
-        // Skip events more than 8 weeks in the future
-        if (startDate > eightWeeksFromNow) {
-          continue;
-        }
-
-        // Format dates - if they already have Z, use them as is
-        let dtStart, dtEnd;
-        if (typeof event.start === 'string') {
-          dtStart = event.start;
-        } else {
-          dtStart = startDate.toISOString();
-        }
-        if (typeof event.end === 'string') {
-          dtEnd = event.end;
-        } else {
-          dtEnd = endDate.toISOString();
-        }
-
-        // Convert to ICS format
-        dtStart = dtStart.replace(/[-:]/g, '').split('.')[0] + 'Z';
-        dtEnd = dtEnd.replace(/[-:]/g, '').split('.')[0] + 'Z';
-
-        busyIcs += "BEGIN:VEVENT\r\n";
-        busyIcs += `UID:busy-${eventCount++}-${key}@busy-proxy\r\n`;
-        busyIcs += `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z\r\n`;
-        busyIcs += `DTSTART:${dtStart}\r\n`;
-        busyIcs += `DTEND:${dtEnd}\r\n`;
-        busyIcs += "SUMMARY:Busy\r\n";
-        busyIcs += "TRANSP:OPAQUE\r\n";
-        busyIcs += "CLASS:PRIVATE\r\n";
-        busyIcs += "STATUS:CONFIRMED\r\n";
-        busyIcs += "END:VEVENT\r\n";
       }
+    }
+
+    // Sort by start time
+    busyBlocks.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    // Generate VEVENT entries
+    for (const block of busyBlocks) {
+      const dtStart = block.start.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      const dtEnd = block.end.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+
+      busyIcs += "BEGIN:VEVENT\r\n";
+      busyIcs += `UID:busy-${eventCount++}-${block.uid}@busy-proxy\r\n`;
+      busyIcs += `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z\r\n`;
+      busyIcs += `DTSTART:${dtStart}\r\n`;
+      busyIcs += `DTEND:${dtEnd}\r\n`;
+      busyIcs += "SUMMARY:Busy\r\n";
+      busyIcs += "TRANSP:OPAQUE\r\n";
+      busyIcs += "CLASS:PRIVATE\r\n";
+      busyIcs += "STATUS:CONFIRMED\r\n";
+      busyIcs += "END:VEVENT\r\n";
     }
 
     busyIcs += "END:VCALENDAR\r\n";
@@ -119,29 +137,43 @@ app.get("/debug", async (req, res) => {
     const sourceUrl = process.env.SOURCE_ICS_URL;
     const response = await fetch(sourceUrl);
     const icsData = await response.text();
-    const events = ical.parseICS(icsData);
+    const events = await ical.async.parseICS(icsData);
     
     const now = new Date();
     const eightWeeks = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
     
-    let futureEvents = 0;
-    let totalEvents = 0;
+    let recurringCount = 0;
+    let singleCount = 0;
+    let expandedCount = 0;
     
     for (const event of Object.values(events)) {
-      if (event.type === 'VEVENT' && event.start) {
-        totalEvents++;
-        const endDate = new Date(event.end || event.start);
-        if (endDate > now) {
-          futureEvents++;
+      if (event.type === 'VEVENT') {
+        if (event.rrule) {
+          recurringCount++;
+          try {
+            const dates = event.rrule.between(now, eightWeeks, true);
+            expandedCount += dates.length;
+          } catch (e) {
+            // ignore
+          }
+        } else if (event.start) {
+          const endDate = new Date(event.end || event.start);
+          if (endDate > now) {
+            singleCount++;
+          }
         }
       }
     }
     
     res.json({
-      totalEvents,
-      futureEvents,
-      nowTime: now.toISOString(),
-      eightWeeksTime: eightWeeks.toISOString()
+      recurringEvents: recurringCount,
+      singleFutureEvents: singleCount,
+      expandedRecurringInstances: expandedCount,
+      totalFutureEvents: singleCount + expandedCount,
+      timeWindow: {
+        start: now.toISOString(),
+        end: eightWeeks.toISOString()
+      }
     });
     
   } catch (error) {
