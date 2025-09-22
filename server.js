@@ -18,11 +18,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Helper: Convert date to ICS format
-function toICSDate(date) {
-  return date.toISOString().replace(/[-:]/g, "").replace(".000", "");
-}
-
 // Main endpoint - parse external ICS and return only busy blocks
 app.get("/busy.ics", async (req, res) => {
   try {
@@ -49,31 +44,53 @@ app.get("/busy.ics", async (req, res) => {
     busyIcs += "CALSCALE:GREGORIAN\r\n";
     busyIcs += "METHOD:PUBLISH\r\n";
     busyIcs += "X-WR-CALNAME:Busy Calendar\r\n";
-    busyIcs += "X-WR-TIMEZONE:UTC\r\n";
+    busyIcs += "X-WR-TIMEZONE:Europe/Berlin\r\n";
 
     const now = new Date();
-    const stamp = toICSDate(now);
+    const eightWeeksFromNow = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
 
     let eventCount = 0;
-    for (const event of Object.values(events)) {
+    for (const [key, event] of Object.entries(events)) {
       if (event.type === 'VEVENT' && event.start) {
         const startDate = new Date(event.start);
         const endDate = new Date(event.end || event.start);
         
-        // Skip past events by default
+        // Skip past events
         if (endDate < now) {
           continue;
         }
+        
+        // Skip events more than 8 weeks in the future
+        if (startDate > eightWeeksFromNow) {
+          continue;
+        }
+
+        // Format dates - if they already have Z, use them as is
+        let dtStart, dtEnd;
+        if (typeof event.start === 'string') {
+          dtStart = event.start;
+        } else {
+          dtStart = startDate.toISOString();
+        }
+        if (typeof event.end === 'string') {
+          dtEnd = event.end;
+        } else {
+          dtEnd = endDate.toISOString();
+        }
+
+        // Convert to ICS format
+        dtStart = dtStart.replace(/[-:]/g, '').split('.')[0] + 'Z';
+        dtEnd = dtEnd.replace(/[-:]/g, '').split('.')[0] + 'Z';
 
         busyIcs += "BEGIN:VEVENT\r\n";
-        busyIcs += `UID:busy-${eventCount++}-${startDate.getTime()}@busy-proxy\r\n`;
-        busyIcs += `DTSTAMP:${stamp}\r\n`;
-        busyIcs += `DTSTART:${toICSDate(startDate)}\r\n`;
-        busyIcs += `DTEND:${toICSDate(endDate)}\r\n`;
+        busyIcs += `UID:busy-${eventCount++}-${key}@busy-proxy\r\n`;
+        busyIcs += `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z\r\n`;
+        busyIcs += `DTSTART:${dtStart}\r\n`;
+        busyIcs += `DTEND:${dtEnd}\r\n`;
         busyIcs += "SUMMARY:Busy\r\n";
-        busyIcs += "DESCRIPTION:Time blocked\r\n";
         busyIcs += "TRANSP:OPAQUE\r\n";
         busyIcs += "CLASS:PRIVATE\r\n";
+        busyIcs += "STATUS:CONFIRMED\r\n";
         busyIcs += "END:VEVENT\r\n";
       }
     }
@@ -82,6 +99,7 @@ app.get("/busy.ics", async (req, res) => {
 
     res.setHeader("Content-Type", "text/calendar; charset=utf-8");
     res.setHeader("Content-Disposition", 'inline; filename="busy.ics"');
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.send(busyIcs);
 
   } catch (error) {
@@ -95,8 +113,43 @@ app.get("/health", (req, res) => {
   res.send("OK");
 });
 
+// Debug endpoint
+app.get("/debug", async (req, res) => {
+  try {
+    const sourceUrl = process.env.SOURCE_ICS_URL;
+    const response = await fetch(sourceUrl);
+    const icsData = await response.text();
+    const events = ical.parseICS(icsData);
+    
+    const now = new Date();
+    const eightWeeks = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
+    
+    let futureEvents = 0;
+    let totalEvents = 0;
+    
+    for (const event of Object.values(events)) {
+      if (event.type === 'VEVENT' && event.start) {
+        totalEvents++;
+        const endDate = new Date(event.end || event.start);
+        if (endDate > now) {
+          futureEvents++;
+        }
+      }
+    }
+    
+    res.json({
+      totalEvents,
+      futureEvents,
+      nowTime: now.toISOString(),
+      eightWeeksTime: eightWeeks.toISOString()
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
-  console.log(`Busy ICS Proxy (Simple) listening on port ${PORT}`);
-  console.log(`Usage: GET /busy.ics?url=<encoded-ics-url>`);
+  console.log(`Busy ICS Proxy listening on port ${PORT}`);
 });
