@@ -60,8 +60,8 @@ app.get("/busy.ics", async (req, res) => {
         const startDate = new Date(event.start);
         const endDate = new Date(event.end || event.start);
         
-        // Skip past events if requested
-        if (req.query.futureOnly === 'true' && endDate < now) {
+        // Skip past events by default
+        if (endDate < now) {
           continue;
         }
 
