@@ -85,9 +85,11 @@
     <h1>Busy Calendar Test UI</h1>
     
     <div style="text-align: center; margin-bottom: 20px;">
-        <button onclick="loadCalendars()">Kalender laden</button>
-        <button onclick="loadToday()">Nur heute</button>
+        <button onclick="loadToday()">Heute</button>
         <button onclick="loadWeek()">Diese Woche</button>
+        <button onclick="loadMonth()">Dieser Monat</button>
+        <button onclick="loadNextMonth()">Nächster Monat</button>
+        <button onclick="loadEightWeeks()">8 Wochen</button>
     </div>
 
     <div class="container">
@@ -153,6 +155,60 @@
                 const original = await originalResp.json();
                 
                 const busyResp = await fetch(`/api/busy?key=${FEED_KEY}&range=week`);
+                const busy = await busyResp.json();
+                
+                displayEvents('original', original);
+                displayEvents('busy', busy);
+                
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        async function loadMonth() {
+            showLoading();
+            
+            try {
+                const originalResp = await fetch(`/api/original?key=${FEED_KEY}&range=month`);
+                const original = await originalResp.json();
+                
+                const busyResp = await fetch(`/api/busy?key=${FEED_KEY}&range=month`);
+                const busy = await busyResp.json();
+                
+                displayEvents('original', original);
+                displayEvents('busy', busy);
+                
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        async function loadNextMonth() {
+            showLoading();
+            
+            try {
+                const originalResp = await fetch(`/api/original?key=${FEED_KEY}&range=nextmonth`);
+                const original = await originalResp.json();
+                
+                const busyResp = await fetch(`/api/busy?key=${FEED_KEY}&range=nextmonth`);
+                const busy = await busyResp.json();
+                
+                displayEvents('original', original);
+                displayEvents('busy', busy);
+                
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        async function loadEightWeeks() {
+            showLoading();
+            
+            try {
+                const originalResp = await fetch(`/api/original?key=${FEED_KEY}&range=8weeks`);
+                const original = await originalResp.json();
+                
+                const busyResp = await fetch(`/api/busy?key=${FEED_KEY}&range=8weeks`);
                 const busy = await busyResp.json();
                 
                 displayEvents('original', original);

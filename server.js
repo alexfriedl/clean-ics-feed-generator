@@ -208,6 +208,16 @@ app.get("/api/original", async (req, res) => {
       case 'week':
         endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
         break;
+      case 'month':
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      case 'nextmonth':
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        endDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      case '8weeks':
+        endDate = new Date(now.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
+        break;
       default:
         endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     }
@@ -277,6 +287,16 @@ app.get("/api/busy", async (req, res) => {
         break;
       case 'week':
         endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      case 'nextmonth':
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        endDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      case '8weeks':
+        endDate = new Date(now.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
         break;
       default:
         endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
