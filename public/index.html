@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Busy Calendar Test UI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .column {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            grid-column: 1 / -1;
+            text-align: center;
+            color: #333;
+        }
+        h2 {
+            margin-top: 0;
+            color: #555;
+        }
+        .event {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9f9f9;
+            border-left: 4px solid #4CAF50;
+            border-radius: 4px;
+        }
+        .event.original {
+            border-left-color: #2196F3;
+        }
+        .time {
+            font-weight: bold;
+            color: #666;
+        }
+        .summary {
+            margin-top: 5px;
+        }
+        .stats {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Busy Calendar Test UI</h1>
+    
+    <div style="text-align: center; margin-bottom: 20px;">
+        <button onclick="loadCalendars()">Kalender laden</button>
+        <button onclick="loadToday()">Nur heute</button>
+        <button onclick="loadWeek()">Diese Woche</button>
+    </div>
+
+    <div class="container">
+        <div class="column">
+            <h2>Original Kalender (mit Details)</h2>
+            <div class="stats" id="originalStats"></div>
+            <div id="originalEvents" class="events-container"></div>
+        </div>
+        
+        <div class="column">
+            <h2>Busy Feed (ohne Details)</h2>
+            <div class="stats" id="busyStats"></div>
+            <div id="busyEvents" class="events-container"></div>
+        </div>
+    </div>
+
+    <script>
+        const FEED_KEY = 'alex-busy-feed-2025';
+        
+        async function loadCalendars() {
+            showLoading();
+            
+            try {
+                // Load original calendar data
+                const originalResp = await fetch(`/api/original?key=${FEED_KEY}`);
+                const original = await originalResp.json();
+                
+                // Load busy feed data
+                const busyResp = await fetch(`/api/busy?key=${FEED_KEY}`);
+                const busy = await busyResp.json();
+                
+                displayEvents('original', original);
+                displayEvents('busy', busy);
+                
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        async function loadToday() {
+            showLoading();
+            
+            try {
+                const originalResp = await fetch(`/api/original?key=${FEED_KEY}&range=today`);
+                const original = await originalResp.json();
+                
+                const busyResp = await fetch(`/api/busy?key=${FEED_KEY}&range=today`);
+                const busy = await busyResp.json();
+                
+                displayEvents('original', original);
+                displayEvents('busy', busy);
+                
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        async function loadWeek() {
+            showLoading();
+            
+            try {
+                const originalResp = await fetch(`/api/original?key=${FEED_KEY}&range=week`);
+                const original = await originalResp.json();
+                
+                const busyResp = await fetch(`/api/busy?key=${FEED_KEY}&range=week`);
+                const busy = await busyResp.json();
+                
+                displayEvents('original', original);
+                displayEvents('busy', busy);
+                
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        function displayEvents(type, data) {
+            const container = document.getElementById(`${type}Events`);
+            const stats = document.getElementById(`${type}Stats`);
+            
+            stats.innerHTML = `
+                <strong>Anzahl Events:</strong> ${data.events.length}<br>
+                <strong>Zeitraum:</strong> ${new Date(data.range.start).toLocaleDateString('de-DE')} - ${new Date(data.range.end).toLocaleDateString('de-DE')}
+            `;
+            
+            container.innerHTML = '';
+            
+            data.events.forEach(event => {
+                const eventDiv = document.createElement('div');
+                eventDiv.className = `event ${type}`;
+                
+                const start = new Date(event.start);
+                const end = new Date(event.end);
+                
+                eventDiv.innerHTML = `
+                    <div class="time">
+                        ${start.toLocaleDateString('de-DE')} ${start.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})} - 
+                        ${end.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}
+                    </div>
+                    <div class="summary">${event.summary || 'Busy'}</div>
+                `;
+                
+                container.appendChild(eventDiv);
+            });
+        }
+        
+        function showLoading() {
+            document.getElementById('originalEvents').innerHTML = '<div class="loading">Laden...</div>';
+            document.getElementById('busyEvents').innerHTML = '<div class="loading">Laden...</div>';
+        }
+        
+        function showError(message) {
+            document.getElementById('originalEvents').innerHTML = `<div class="error">Fehler: ${message}</div>`;
+            document.getElementById('busyEvents').innerHTML = `<div class="error">Fehler: ${message}</div>`;
+        }
+        
+        // Load on start
+        window.onload = () => loadToday();
+    </script>
+</body>
+</html>

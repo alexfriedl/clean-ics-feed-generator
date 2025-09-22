@@ -2,11 +2,19 @@ import express from "express";
 import fetch from "node-fetch";
 import ical from "node-ical";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Middleware für optional security key
 app.use((req, res, next) => {
@@ -174,6 +182,146 @@ app.get("/debug", async (req, res) => {
         start: now.toISOString(),
         end: eightWeeks.toISOString()
       }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API endpoint for original calendar events
+app.get("/api/original", async (req, res) => {
+  try {
+    const sourceUrl = process.env.SOURCE_ICS_URL;
+    const response = await fetch(sourceUrl);
+    const icsData = await response.text();
+    const events = await ical.async.parseICS(icsData);
+    
+    const now = new Date();
+    let endDate;
+    
+    switch(req.query.range) {
+      case 'today':
+        endDate = new Date(now);
+        endDate.setHours(23, 59, 59, 999);
+        break;
+      case 'week':
+        endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    }
+    
+    let eventList = [];
+    
+    for (const [key, event] of Object.entries(events)) {
+      if (event.type === 'VEVENT') {
+        if (event.rrule) {
+          try {
+            const dates = event.rrule.between(now, endDate, true);
+            for (const date of dates) {
+              const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000;
+              eventList.push({
+                summary: event.summary || 'No title',
+                start: date,
+                end: new Date(date.getTime() + duration),
+                type: 'recurring'
+              });
+            }
+          } catch (e) {
+            console.error('Recurring event error:', e);
+          }
+        } else if (event.start) {
+          const startDate = new Date(event.start);
+          const eventEnd = new Date(event.end || event.start);
+          
+          if (eventEnd >= now && startDate <= endDate) {
+            eventList.push({
+              summary: event.summary || 'No title',
+              start: event.start,
+              end: event.end || event.start,
+              type: 'single'
+            });
+          }
+        }
+      }
+    }
+    
+    eventList.sort((a, b) => new Date(a.start) - new Date(b.start));
+    
+    res.json({
+      events: eventList,
+      range: { start: now, end: endDate }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API endpoint for busy feed events
+app.get("/api/busy", async (req, res) => {
+  try {
+    const sourceUrl = process.env.SOURCE_ICS_URL;
+    const response = await fetch(sourceUrl);
+    const icsData = await response.text();
+    const events = await ical.async.parseICS(icsData);
+    
+    const now = new Date();
+    let endDate;
+    
+    switch(req.query.range) {
+      case 'today':
+        endDate = new Date(now);
+        endDate.setHours(23, 59, 59, 999);
+        break;
+      case 'week':
+        endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    }
+    
+    let eventList = [];
+    
+    for (const [key, event] of Object.entries(events)) {
+      if (event.type === 'VEVENT') {
+        if (event.rrule) {
+          try {
+            const dates = event.rrule.between(now, endDate, true);
+            for (const date of dates) {
+              const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000;
+              eventList.push({
+                summary: 'Busy',
+                start: date,
+                end: new Date(date.getTime() + duration),
+                type: 'recurring'
+              });
+            }
+          } catch (e) {
+            console.error('Recurring event error:', e);
+          }
+        } else if (event.start) {
+          const startDate = new Date(event.start);
+          const eventEnd = new Date(event.end || event.start);
+          
+          if (eventEnd >= now && startDate <= endDate) {
+            eventList.push({
+              summary: 'Busy',
+              start: event.start,
+              end: event.end || event.start,
+              type: 'single'
+            });
+          }
+        }
+      }
+    }
+    
+    eventList.sort((a, b) => new Date(a.start) - new Date(b.start));
+    
+    res.json({
+      events: eventList,
+      range: { start: now, end: endDate }
     });
     
   } catch (error) {
