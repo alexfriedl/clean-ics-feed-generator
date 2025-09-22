@@ -13,8 +13,16 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
+// Protected route for test UI
+app.get('/', (req, res) => {
+  const UI_KEY = process.env.UI_KEY || 'test-ui-2025';
+  
+  if (req.query.key !== UI_KEY) {
+    return res.status(403).send('Access denied. Add ?key=YOUR_UI_KEY to URL');
+  }
+  
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // Middleware für optional security key
 app.use((req, res, next) => {
