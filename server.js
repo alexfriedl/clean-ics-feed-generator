@@ -65,6 +65,12 @@ app.get("/busy.ics", async (req, res) => {
     busyIcs += "X-WR-TIMEZONE:Europe/Berlin\r\n";
 
     const now = new Date();
+    // Include events from the start of this week (Monday)
+    const startOfWeek = new Date(now);
+    const daysSinceMonday = (now.getDay() + 6) % 7; // Convert Sunday=0 to Monday=0
+    startOfWeek.setDate(now.getDate() - daysSinceMonday);
+    startOfWeek.setHours(0, 0, 0, 0);
+    
     const eightWeeksFromNow = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
     
     let eventCount = 0;
@@ -76,7 +82,7 @@ app.get("/busy.ics", async (req, res) => {
         // Handle recurring events
         if (event.rrule) {
           try {
-            const dates = event.rrule.between(now, eightWeeksFromNow, true);
+            const dates = event.rrule.between(startOfWeek, eightWeeksFromNow, true);
             
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
@@ -116,8 +122,8 @@ app.get("/busy.ics", async (req, res) => {
           const startDate = new Date(event.start);
           const endDate = new Date(event.end || event.start);
           
-          // Only include if within our time window
-          if (endDate > now && startDate < eightWeeksFromNow) {
+          // Only include if within our time window (from start of week to 8 weeks out)
+          if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
             busyBlocks.push({
               start: startDate,
               end: endDate,
@@ -287,27 +293,43 @@ app.get("/api/original", async (req, res) => {
     const events = await ical.async.parseICS(icsData);
     
     const now = new Date();
-    let endDate;
+    let startDate, endDate;
     
     switch(req.query.range) {
       case 'today':
+        startDate = new Date(now);
+        startDate.setHours(0, 0, 0, 0);
         endDate = new Date(now);
         endDate.setHours(23, 59, 59, 999);
         break;
       case 'week':
-        endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        // Start from beginning of this week (Monday)
+        startDate = new Date(now);
+        const daysSinceMonday = (now.getDay() + 6) % 7;
+        startDate.setDate(now.getDate() - daysSinceMonday);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
         break;
       case 'month':
+        // Start from beginning of this month
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
         break;
       case 'nextmonth':
         const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        startDate = nextMonth;
         endDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0, 23, 59, 59);
         break;
       case '8weeks':
-        endDate = new Date(now.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
+        // Start from beginning of this week (Monday)
+        startDate = new Date(now);
+        const daysSinceMondayWeeks = (now.getDay() + 6) % 7;
+        startDate.setDate(now.getDate() - daysSinceMondayWeeks);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(startDate.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
         break;
       default:
+        startDate = now;
         endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     }
     
@@ -317,7 +339,7 @@ app.get("/api/original", async (req, res) => {
       if (event.type === 'VEVENT') {
         if (event.rrule) {
           try {
-            const dates = event.rrule.between(now, endDate, true);
+            const dates = event.rrule.between(startDate, endDate, true);
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000;
               eventList.push({
@@ -331,10 +353,10 @@ app.get("/api/original", async (req, res) => {
             console.error('Recurring event error:', e);
           }
         } else if (event.start) {
-          const startDate = new Date(event.start);
+          const eventStart = new Date(event.start);
           const eventEnd = new Date(event.end || event.start);
           
-          if (eventEnd >= now && startDate <= endDate) {
+          if (eventEnd >= startDate && eventStart <= endDate) {
             eventList.push({
               summary: event.summary || 'No title',
               start: event.start,
@@ -350,7 +372,7 @@ app.get("/api/original", async (req, res) => {
     
     res.json({
       events: eventList,
-      range: { start: now, end: endDate }
+      range: { start: startDate, end: endDate }
     });
     
   } catch (error) {
@@ -367,27 +389,43 @@ app.get("/api/busy", async (req, res) => {
     const events = await ical.async.parseICS(icsData);
     
     const now = new Date();
-    let endDate;
+    let startDate, endDate;
     
     switch(req.query.range) {
       case 'today':
+        startDate = new Date(now);
+        startDate.setHours(0, 0, 0, 0);
         endDate = new Date(now);
         endDate.setHours(23, 59, 59, 999);
         break;
       case 'week':
-        endDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        // Start from beginning of this week (Monday)
+        startDate = new Date(now);
+        const daysSinceMonday = (now.getDay() + 6) % 7;
+        startDate.setDate(now.getDate() - daysSinceMonday);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
         break;
       case 'month':
+        // Start from beginning of this month
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
         break;
       case 'nextmonth':
         const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        startDate = nextMonth;
         endDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0, 23, 59, 59);
         break;
       case '8weeks':
-        endDate = new Date(now.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
+        // Start from beginning of this week (Monday)
+        startDate = new Date(now);
+        const daysSinceMondayWeeks = (now.getDay() + 6) % 7;
+        startDate.setDate(now.getDate() - daysSinceMondayWeeks);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(startDate.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
         break;
       default:
+        startDate = now;
         endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     }
     
@@ -397,7 +435,7 @@ app.get("/api/busy", async (req, res) => {
       if (event.type === 'VEVENT') {
         if (event.rrule) {
           try {
-            const dates = event.rrule.between(now, endDate, true);
+            const dates = event.rrule.between(startDate, endDate, true);
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000;
               eventList.push({
@@ -411,10 +449,10 @@ app.get("/api/busy", async (req, res) => {
             console.error('Recurring event error:', e);
           }
         } else if (event.start) {
-          const startDate = new Date(event.start);
+          const eventStart = new Date(event.start);
           const eventEnd = new Date(event.end || event.start);
           
-          if (eventEnd >= now && startDate <= endDate) {
+          if (eventEnd >= startDate && eventStart <= endDate) {
             eventList.push({
               summary: 'Busy',
               start: event.start,
@@ -430,7 +468,7 @@ app.get("/api/busy", async (req, res) => {
     
     res.json({
       events: eventList,
-      range: { start: now, end: endDate }
+      range: { start: startDate, end: endDate }
     });
     
   } catch (error) {

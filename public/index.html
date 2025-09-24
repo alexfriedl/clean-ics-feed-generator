@@ -223,9 +223,15 @@
             const container = document.getElementById(`${type}Events`);
             const stats = document.getElementById(`${type}Stats`);
             
+            if (!data || !data.events) {
+                stats.innerHTML = `<strong>Fehler:</strong> Keine Daten empfangen`;
+                container.innerHTML = '<div class="error">Fehler beim Laden der Events</div>';
+                return;
+            }
+            
             stats.innerHTML = `
                 <strong>Anzahl Events:</strong> ${data.events.length}<br>
-                <strong>Zeitraum:</strong> ${new Date(data.range.start).toLocaleDateString('de-DE')} - ${new Date(data.range.end).toLocaleDateString('de-DE')}
+                <strong>Zeitraum:</strong> ${data.range ? new Date(data.range.start).toLocaleDateString('de-DE') + ' - ' + new Date(data.range.end).toLocaleDateString('de-DE') : 'Unbekannt'}
             `;
             
             container.innerHTML = '';
