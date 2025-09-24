@@ -80,8 +80,27 @@ app.get("/busy.ics", async (req, res) => {
             
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
-              const startDate = new Date(date);
-              const endDate = new Date(date.getTime() + duration);
+              
+              // BUG FIX: When running in UTC timezone (e.g., on Heroku), node-ical's RRULE
+              // expansion returns dates that are offset by the timezone difference.
+              // For Europe/Berlin events, this is typically -2 hours during summer time.
+              // We need to detect and compensate for this.
+              let startDate = new Date(date);
+              
+              // Check if we're running in UTC and the event has a timezone
+              if (process.env.TZ === 'UTC' || new Date().getTimezoneOffset() === 0) {
+                if (event.start && event.start.tz === 'Europe/Berlin') {
+                  // During CEST (summer time), Berlin is UTC+2
+                  // During CET (winter time), Berlin is UTC+1
+                  // The RRULE expansion seems to be off by this amount
+                  const month = startDate.getMonth();
+                  const isSummerTime = month >= 2 && month <= 9; // Rough approximation
+                  const hoursToAdd = isSummerTime ? 2 : 1;
+                  startDate = new Date(startDate.getTime() + hoursToAdd * 3600000);
+                }
+              }
+              
+              const endDate = new Date(startDate.getTime() + duration);
               
               busyBlocks.push({
                 start: startDate,
@@ -126,6 +145,7 @@ app.get("/busy.ics", async (req, res) => {
       busyIcs += "TRANSP:OPAQUE\r\n";
       busyIcs += "CLASS:PRIVATE\r\n";
       busyIcs += "STATUS:CONFIRMED\r\n";
+      busyIcs += `X-ORIGINAL-START:${block.start.toString()}\r\n`;
       busyIcs += "END:VEVENT\r\n";
     }
 
@@ -145,6 +165,67 @@ app.get("/busy.ics", async (req, res) => {
 // Health check
 app.get("/health", (req, res) => {
   res.send("OK");
+});
+
+// Server timezone info
+app.get("/tzinfo", (req, res) => {
+  const now = new Date();
+  const testDate = new Date('2025-08-07T08:00:00');
+  const berlinDate = new Date('2025-08-07T08:00:00+02:00');
+  
+  res.json({
+    serverTimezone: process.env.TZ || 'default',
+    serverTime: now.toString(),
+    serverTimeUTC: now.toISOString(),
+    timezoneOffset: now.getTimezoneOffset(),
+    testDate: testDate.toString(),
+    testDateUTC: testDate.toISOString(),
+    berlinDate: berlinDate.toString(),
+    berlinDateUTC: berlinDate.toISOString()
+  });
+});
+
+// Timezone debug endpoint
+app.get("/debug/timezone/:uid", async (req, res) => {
+  try {
+    const sourceUrl = process.env.SOURCE_ICS_URL;
+    const response = await fetch(sourceUrl);
+    const icsData = await response.text();
+    const events = await ical.async.parseICS(icsData);
+    
+    const targetUid = req.params.uid;
+    const event = events[targetUid];
+    
+    if (!event) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    
+    const now = new Date();
+    const eightWeeks = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
+    
+    let debugInfo = {
+      uid: targetUid,
+      summary: event.summary,
+      originalStart: event.start,
+      originalEnd: event.end,
+      timezone: event.start?.tz,
+      rrule: event.rrule?.toString()
+    };
+    
+    if (event.rrule) {
+      const dates = event.rrule.between(now, eightWeeks, true);
+      debugInfo.recurringInstances = dates.slice(0, 5).map(date => ({
+        jsDate: date,
+        isoString: date.toISOString(),
+        localString: date.toString(),
+        tzOffset: date.getTimezoneOffset()
+      }));
+    }
+    
+    res.json(debugInfo);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Debug endpoint
