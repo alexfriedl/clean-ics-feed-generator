@@ -26,6 +26,8 @@ jobs:
             --exclude 'node_modules' \
             --exclude '.git' \
             --exclude '.env' \
+            --exclude '.env.production' \
+            --filter 'P .env' \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ \
             ${{ secrets.HETZNER_USER }}@${{ secrets.HETZNER_HOST }}:/root/docker/hetzner-clean-ics-feed/
