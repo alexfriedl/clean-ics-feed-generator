@@ -41,11 +41,19 @@ jobs:
             cd /root/docker/hetzner-radiorachel
 
             # Stop and remove old container
-            docker-compose down || true
+            docker stop hetzner-radiorachel || true
+            docker rm hetzner-radiorachel || true
 
-            # Build and start container
-            docker-compose build --no-cache
-            docker-compose up -d
+            # Build new image
+            docker build -t hetzner-radiorachel:latest .
+
+            # Start container
+            docker run -d \
+              --name hetzner-radiorachel \
+              --restart unless-stopped \
+              --env-file .env \
+              --network traefik \
+              hetzner-radiorachel:latest
 
             # Cleanup old images
             docker image prune -f
