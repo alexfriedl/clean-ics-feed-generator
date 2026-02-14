@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: hetzner-radiorachel
+    container_name: hetzner-clean-ics-feed
     restart: unless-stopped
     env_file:
       - .env

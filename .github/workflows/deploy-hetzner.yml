@@ -28,7 +28,7 @@ jobs:
             --exclude '.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ \
-            ${{ secrets.HETZNER_USER }}@${{ secrets.HETZNER_HOST }}:/root/docker/hetzner-radiorachel/
+            ${{ secrets.HETZNER_USER }}@${{ secrets.HETZNER_HOST }}:/root/docker/hetzner-clean-ics-feed/
 
       - name: Build and deploy
         uses: appleboy/ssh-action@v1.0.3
@@ -38,22 +38,22 @@ jobs:
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
             set -e
-            cd /root/docker/hetzner-radiorachel
+            cd /root/docker/hetzner-clean-ics-feed
 
             # Stop and remove old container
-            docker stop hetzner-radiorachel || true
-            docker rm hetzner-radiorachel || true
+            docker stop hetzner-clean-ics-feed || true
+            docker rm hetzner-clean-ics-feed || true
 
             # Build new image
-            docker build -t hetzner-radiorachel:latest .
+            docker build -t hetzner-clean-ics-feed:latest .
 
             # Start container
             docker run -d \
-              --name hetzner-radiorachel \
+              --name hetzner-clean-ics-feed \
               --restart unless-stopped \
               --env-file .env \
               --network traefik \
-              hetzner-radiorachel:latest
+              hetzner-clean-ics-feed:latest
 
             # Cleanup old images
             docker image prune -f
@@ -61,4 +61,4 @@ jobs:
             # Health check
             echo "Waiting for container to start..."
             sleep 5
-            docker logs hetzner-radiorachel --tail 20
+            docker logs hetzner-clean-ics-feed --tail 20
