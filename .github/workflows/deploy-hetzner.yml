@@ -40,7 +40,10 @@ jobs:
             set -e
             cd /root/docker/hetzner-radiorachel
 
-            # Build and restart container
+            # Stop and remove old container
+            docker-compose down || true
+
+            # Build and start container
             docker-compose build --no-cache
             docker-compose up -d
 
