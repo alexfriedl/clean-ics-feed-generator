@@ -131,17 +131,32 @@ app.get("/busy.ics", async (req, res) => {
 
     let eventCount = 0;
 
+    // Helper to format time in Berlin timezone with AM/PM
+    const formatBerlinTime = (date) => {
+      return date.toLocaleTimeString('en-US', {
+        timeZone: 'Europe/Berlin',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    };
+
     for (const block of busyBlocks) {
       // Output in UTC with Z suffix - this is the clearest format
       const dtStart = block.start.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
       const dtEnd = block.end.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+
+      // Format times for summary (e.g., "9:15 - 10:00 AM")
+      const startTime = formatBerlinTime(block.start);
+      const endTime = formatBerlinTime(block.end);
+      const summary = `Busy ${startTime} - ${endTime}`;
 
       busyIcs += "BEGIN:VEVENT\r\n";
       busyIcs += `UID:busy-${eventCount++}-${block.uid}@busy-proxy\r\n`;
       busyIcs += `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z\r\n`;
       busyIcs += `DTSTART:${dtStart}\r\n`;
       busyIcs += `DTEND:${dtEnd}\r\n`;
-      busyIcs += "SUMMARY:Busy\r\n";
+      busyIcs += `SUMMARY:${summary}\r\n`;
       busyIcs += "TRANSP:OPAQUE\r\n";
       busyIcs += "CLASS:PRIVATE\r\n";
       busyIcs += "STATUS:CONFIRMED\r\n";
