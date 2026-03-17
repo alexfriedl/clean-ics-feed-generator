@@ -92,8 +92,6 @@ app.get("/busy.ics", async (req, res) => {
               // We need to subtract the timezone offset to get correct UTC times
               let startDate = new Date(date);
 
-              // Subtract 1 hour - node-ical's rrule returns times offset by 1h
-              startDate = new Date(startDate.getTime() - 3600000);
 
               const endDate = new Date(startDate.getTime() + duration);
               
