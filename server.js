@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import ical from "node-ical";
+import ICAL from "ical.js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from 'url';
@@ -16,11 +16,11 @@ const PORT = process.env.PORT || 3000;
 // Protected route for test UI
 app.get('/', (req, res) => {
   const UI_KEY = process.env.UI_KEY || 'test-ui-2025';
-  
+
   if (req.query.key !== UI_KEY) {
     return res.status(403).send('Access denied. Add ?key=YOUR_UI_KEY to URL');
   }
-  
+
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
@@ -38,7 +38,7 @@ app.use((req, res, next) => {
 app.get("/busy.ics", async (req, res) => {
   try {
     const sourceUrl = req.query.url || process.env.SOURCE_ICS_URL;
-    
+
     if (!sourceUrl) {
       return res.status(400).send("Missing source ICS URL");
     }
@@ -50,11 +50,76 @@ app.get("/busy.ics", async (req, res) => {
     }
 
     const icsData = await response.text();
-    
-    // Parse with node-ical to handle recurring events
-    const events = await ical.async.parseICS(icsData);
 
-    // Build new ICS with only busy blocks
+    // Parse with ical.js - handles timezones correctly
+    const jcalData = ICAL.parse(icsData);
+    const vcalendar = new ICAL.Component(jcalData);
+    const vevents = vcalendar.getAllSubcomponents('vevent');
+
+    // Time window
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    const daysSinceMonday = (now.getDay() + 6) % 7;
+    startOfWeek.setDate(now.getDate() - daysSinceMonday);
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const eightWeeksFromNow = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
+
+    let busyBlocks = [];
+
+    for (const vevent of vevents) {
+      const event = new ICAL.Event(vevent);
+
+      // Check for recurring events
+      if (event.isRecurring()) {
+        const expand = event.iterator();
+        let next;
+        let count = 0;
+        const maxOccurrences = 100; // Safety limit
+
+        while ((next = expand.next()) && count < maxOccurrences) {
+          const occurrenceStart = next.toJSDate();
+
+          if (occurrenceStart > eightWeeksFromNow) break;
+          if (occurrenceStart < startOfWeek) {
+            count++;
+            continue;
+          }
+
+          const duration = event.duration;
+          const durationMs = duration ?
+            (duration.days * 86400000 + duration.hours * 3600000 + duration.minutes * 60000 + duration.seconds * 1000) :
+            3600000;
+
+          const occurrenceEnd = new Date(occurrenceStart.getTime() + durationMs);
+
+          busyBlocks.push({
+            start: occurrenceStart,
+            end: occurrenceEnd,
+            uid: `${event.uid}-${occurrenceStart.getTime()}`
+          });
+
+          count++;
+        }
+      } else {
+        // Single event
+        const startDate = event.startDate.toJSDate();
+        const endDate = event.endDate ? event.endDate.toJSDate() : startDate;
+
+        if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
+          busyBlocks.push({
+            start: startDate,
+            end: endDate,
+            uid: event.uid
+          });
+        }
+      }
+    }
+
+    // Sort by start time
+    busyBlocks.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    // Build ICS output
     let busyIcs = "";
     busyIcs += "BEGIN:VCALENDAR\r\n";
     busyIcs += "VERSION:2.0\r\n";
@@ -64,83 +129,22 @@ app.get("/busy.ics", async (req, res) => {
     busyIcs += "X-WR-CALNAME:Busy Calendar\r\n";
     busyIcs += "X-WR-TIMEZONE:Europe/Berlin\r\n";
 
-    const now = new Date();
-    // Include events from the start of this week (Monday)
-    const startOfWeek = new Date(now);
-    const daysSinceMonday = (now.getDay() + 6) % 7; // Convert Sunday=0 to Monday=0
-    startOfWeek.setDate(now.getDate() - daysSinceMonday);
-    startOfWeek.setHours(0, 0, 0, 0);
-    
-    const eightWeeksFromNow = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
-    
     let eventCount = 0;
-    let busyBlocks = [];
 
-    // Process all events including recurring ones
-    for (const [key, event] of Object.entries(events)) {
-      if (event.type === 'VEVENT') {
-        // Handle recurring events
-        if (event.rrule) {
-          try {
-            const dates = event.rrule.between(startOfWeek, eightWeeksFromNow, true);
-            
-            for (const date of dates) {
-              const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
-
-              // Add 2h to compensate for node-ical's rrule timezone handling
-              const startDate = new Date(date.getTime() + 2 * 3600000);
-              const endDate = new Date(startDate.getTime() + duration);
-              
-              busyBlocks.push({
-                start: startDate,
-                end: endDate,
-                uid: `${key}-${startDate.getTime()}`
-              });
-            }
-          } catch (e) {
-            console.error('Error processing recurring event:', e);
-          }
-        } else if (event.start) {
-          // Regular single event - subtract 1h to get correct Berlin time
-          const startDate = new Date(event.start.getTime() - 1 * 3600000);
-          const endDate = new Date(event.end ? event.end.getTime() - 1 * 3600000 : startDate.getTime());
-
-          // Only include if within our time window (from start of week to 8 weeks out)
-          if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
-            busyBlocks.push({
-              start: startDate,
-              end: endDate,
-              uid: key
-            });
-          }
-        }
-      }
-    }
-
-    // Sort by start time
-    busyBlocks.sort((a, b) => a.start.getTime() - b.start.getTime());
-
-    // Helper to format date as local time (without UTC conversion)
-    const formatLocalTime = (date) => {
-      const pad = (n) => n.toString().padStart(2, '0');
-      return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`;
-    };
-
-    // Generate VEVENT entries
     for (const block of busyBlocks) {
-      const dtStart = formatLocalTime(block.start);
-      const dtEnd = formatLocalTime(block.end);
+      // Output in UTC with Z suffix - this is the clearest format
+      const dtStart = block.start.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      const dtEnd = block.end.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
       busyIcs += "BEGIN:VEVENT\r\n";
       busyIcs += `UID:busy-${eventCount++}-${block.uid}@busy-proxy\r\n`;
       busyIcs += `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z\r\n`;
-      busyIcs += `DTSTART;TZID=Europe/Berlin:${dtStart}\r\n`;
-      busyIcs += `DTEND;TZID=Europe/Berlin:${dtEnd}\r\n`;
+      busyIcs += `DTSTART:${dtStart}\r\n`;
+      busyIcs += `DTEND:${dtEnd}\r\n`;
       busyIcs += "SUMMARY:Busy\r\n";
       busyIcs += "TRANSP:OPAQUE\r\n";
       busyIcs += "CLASS:PRIVATE\r\n";
       busyIcs += "STATUS:CONFIRMED\r\n";
-      busyIcs += `X-ORIGINAL-START:${block.start.toString()}\r\n`;
       busyIcs += "END:VEVENT\r\n";
     }
 
@@ -160,309 +164,6 @@ app.get("/busy.ics", async (req, res) => {
 // Health check
 app.get("/health", (req, res) => {
   res.send("OK");
-});
-
-// Server timezone info
-app.get("/tzinfo", (req, res) => {
-  const now = new Date();
-  const testDate = new Date('2025-08-07T08:00:00');
-  const berlinDate = new Date('2025-08-07T08:00:00+02:00');
-  
-  res.json({
-    serverTimezone: process.env.TZ || 'default',
-    serverTime: now.toString(),
-    serverTimeUTC: now.toISOString(),
-    timezoneOffset: now.getTimezoneOffset(),
-    testDate: testDate.toString(),
-    testDateUTC: testDate.toISOString(),
-    berlinDate: berlinDate.toString(),
-    berlinDateUTC: berlinDate.toISOString()
-  });
-});
-
-// Timezone debug endpoint
-app.get("/debug/timezone/:uid", async (req, res) => {
-  try {
-    const sourceUrl = process.env.SOURCE_ICS_URL;
-    const response = await fetch(sourceUrl);
-    const icsData = await response.text();
-    const events = await ical.async.parseICS(icsData);
-    
-    const targetUid = req.params.uid;
-    const event = events[targetUid];
-    
-    if (!event) {
-      return res.status(404).json({ error: "Event not found" });
-    }
-    
-    const now = new Date();
-    const eightWeeks = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
-    
-    let debugInfo = {
-      uid: targetUid,
-      summary: event.summary,
-      originalStart: event.start,
-      originalEnd: event.end,
-      timezone: event.start?.tz,
-      rrule: event.rrule?.toString()
-    };
-    
-    if (event.rrule) {
-      const dates = event.rrule.between(now, eightWeeks, true);
-      debugInfo.recurringInstances = dates.slice(0, 5).map(date => ({
-        jsDate: date,
-        isoString: date.toISOString(),
-        localString: date.toString(),
-        tzOffset: date.getTimezoneOffset()
-      }));
-    }
-    
-    res.json(debugInfo);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Debug endpoint
-app.get("/debug", async (req, res) => {
-  try {
-    const sourceUrl = process.env.SOURCE_ICS_URL;
-    const response = await fetch(sourceUrl);
-    const icsData = await response.text();
-    const events = await ical.async.parseICS(icsData);
-    
-    const now = new Date();
-    const eightWeeks = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
-    
-    let recurringCount = 0;
-    let singleCount = 0;
-    let expandedCount = 0;
-    
-    for (const event of Object.values(events)) {
-      if (event.type === 'VEVENT') {
-        if (event.rrule) {
-          recurringCount++;
-          try {
-            const dates = event.rrule.between(now, eightWeeks, true);
-            expandedCount += dates.length;
-          } catch (e) {
-            // ignore
-          }
-        } else if (event.start) {
-          const endDate = new Date(event.end || event.start);
-          if (endDate > now) {
-            singleCount++;
-          }
-        }
-      }
-    }
-    
-    res.json({
-      recurringEvents: recurringCount,
-      singleFutureEvents: singleCount,
-      expandedRecurringInstances: expandedCount,
-      totalFutureEvents: singleCount + expandedCount,
-      timeWindow: {
-        start: now.toISOString(),
-        end: eightWeeks.toISOString()
-      }
-    });
-    
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// API endpoint for original calendar events
-app.get("/api/original", async (req, res) => {
-  try {
-    const sourceUrl = process.env.SOURCE_ICS_URL;
-    const response = await fetch(sourceUrl);
-    const icsData = await response.text();
-    const events = await ical.async.parseICS(icsData);
-    
-    const now = new Date();
-    let startDate, endDate;
-    
-    switch(req.query.range) {
-      case 'today':
-        startDate = new Date(now);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(now);
-        endDate.setHours(23, 59, 59, 999);
-        break;
-      case 'week':
-        // Start from beginning of this week (Monday)
-        startDate = new Date(now);
-        const daysSinceMonday = (now.getDay() + 6) % 7;
-        startDate.setDate(now.getDate() - daysSinceMonday);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
-        break;
-      case 'month':
-        // Start from beginning of this month
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-        break;
-      case 'nextmonth':
-        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-        startDate = nextMonth;
-        endDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0, 23, 59, 59);
-        break;
-      case '8weeks':
-        // Start from beginning of this week (Monday)
-        startDate = new Date(now);
-        const daysSinceMondayWeeks = (now.getDay() + 6) % 7;
-        startDate.setDate(now.getDate() - daysSinceMondayWeeks);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(startDate.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
-        break;
-      default:
-        startDate = now;
-        endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    }
-    
-    let eventList = [];
-    
-    for (const [key, event] of Object.entries(events)) {
-      if (event.type === 'VEVENT') {
-        if (event.rrule) {
-          try {
-            const dates = event.rrule.between(startDate, endDate, true);
-            for (const date of dates) {
-              const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000;
-              eventList.push({
-                summary: event.summary || 'No title',
-                start: date,
-                end: new Date(date.getTime() + duration),
-                type: 'recurring'
-              });
-            }
-          } catch (e) {
-            console.error('Recurring event error:', e);
-          }
-        } else if (event.start) {
-          const eventStart = new Date(event.start);
-          const eventEnd = new Date(event.end || event.start);
-          
-          if (eventEnd >= startDate && eventStart <= endDate) {
-            eventList.push({
-              summary: event.summary || 'No title',
-              start: event.start,
-              end: event.end || event.start,
-              type: 'single'
-            });
-          }
-        }
-      }
-    }
-    
-    eventList.sort((a, b) => new Date(a.start) - new Date(b.start));
-    
-    res.json({
-      events: eventList,
-      range: { start: startDate, end: endDate }
-    });
-    
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// API endpoint for busy feed events
-app.get("/api/busy", async (req, res) => {
-  try {
-    const sourceUrl = process.env.SOURCE_ICS_URL;
-    const response = await fetch(sourceUrl);
-    const icsData = await response.text();
-    const events = await ical.async.parseICS(icsData);
-    
-    const now = new Date();
-    let startDate, endDate;
-    
-    switch(req.query.range) {
-      case 'today':
-        startDate = new Date(now);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(now);
-        endDate.setHours(23, 59, 59, 999);
-        break;
-      case 'week':
-        // Start from beginning of this week (Monday)
-        startDate = new Date(now);
-        const daysSinceMonday = (now.getDay() + 6) % 7;
-        startDate.setDate(now.getDate() - daysSinceMonday);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
-        break;
-      case 'month':
-        // Start from beginning of this month
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-        break;
-      case 'nextmonth':
-        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-        startDate = nextMonth;
-        endDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0, 23, 59, 59);
-        break;
-      case '8weeks':
-        // Start from beginning of this week (Monday)
-        startDate = new Date(now);
-        const daysSinceMondayWeeks = (now.getDay() + 6) % 7;
-        startDate.setDate(now.getDate() - daysSinceMondayWeeks);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(startDate.getTime() + 8 * 7 * 24 * 60 * 60 * 1000);
-        break;
-      default:
-        startDate = now;
-        endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    }
-    
-    let eventList = [];
-    
-    for (const [key, event] of Object.entries(events)) {
-      if (event.type === 'VEVENT') {
-        if (event.rrule) {
-          try {
-            const dates = event.rrule.between(startDate, endDate, true);
-            for (const date of dates) {
-              const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000;
-              eventList.push({
-                summary: 'Busy',
-                start: date,
-                end: new Date(date.getTime() + duration),
-                type: 'recurring'
-              });
-            }
-          } catch (e) {
-            console.error('Recurring event error:', e);
-          }
-        } else if (event.start) {
-          const eventStart = new Date(event.start);
-          const eventEnd = new Date(event.end || event.start);
-          
-          if (eventEnd >= startDate && eventStart <= endDate) {
-            eventList.push({
-              summary: 'Busy',
-              start: event.start,
-              end: event.end || event.start,
-              type: 'single'
-            });
-          }
-        }
-      }
-    }
-    
-    eventList.sort((a, b) => new Date(a.start) - new Date(b.start));
-    
-    res.json({
-      events: eventList,
-      range: { start: startDate, end: endDate }
-    });
-    
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 // Start server
