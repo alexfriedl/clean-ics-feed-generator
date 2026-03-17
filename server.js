@@ -87,8 +87,8 @@ app.get("/busy.ics", async (req, res) => {
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
 
-              // Add 1h to compensate for node-ical's rrule timezone handling (CET = UTC+1)
-              const startDate = new Date(date.getTime() + 1 * 3600000);
+              // Add 2h to compensate for node-ical's rrule timezone handling
+              const startDate = new Date(date.getTime() + 2 * 3600000);
               const endDate = new Date(startDate.getTime() + duration);
               
               busyBlocks.push({
