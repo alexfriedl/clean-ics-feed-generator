@@ -132,13 +132,12 @@ app.get("/busy.ics", async (req, res) => {
     let eventCount = 0;
 
     // Helper to format time in Berlin timezone with AM/PM
+    // e.g., "9 AM", "10 AM", "9:15 AM", "3:50 PM"
     const formatBerlinTime = (date) => {
-      return date.toLocaleTimeString('en-US', {
-        timeZone: 'Europe/Berlin',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
+      const options = { timeZone: 'Europe/Berlin', hour: 'numeric', minute: '2-digit', hour12: true };
+      const timeStr = date.toLocaleTimeString('en-US', options);
+      // Remove :00 for whole hours (e.g., "9:00 AM" -> "9 AM")
+      return timeStr.replace(':00', '');
     };
 
     for (const block of busyBlocks) {
