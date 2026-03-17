@@ -92,12 +92,7 @@ app.get("/busy.ics", async (req, res) => {
               // We need to subtract the timezone offset to get correct UTC times
               let startDate = new Date(date);
 
-              if (event.start && event.start.tz === 'Europe/Berlin') {
-                // Get the actual offset for this specific date (handles DST correctly)
-                const offsetMs = startDate.getTimezoneOffset() === 0 ?
-                  (startDate.getMonth() >= 2 && startDate.getMonth() <= 9 ? 2 : 1) * 3600000 : 0;
-                startDate = new Date(startDate.getTime() - offsetMs);
-              }
+              // No timezone adjustment needed - node-ical handles it correctly
 
               const endDate = new Date(startDate.getTime() + duration);
               
