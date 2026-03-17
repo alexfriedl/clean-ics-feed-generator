@@ -87,8 +87,7 @@ app.get("/busy.ics", async (req, res) => {
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
 
-              // node-ical's rrule returns times 1h early for Europe/Berlin, add 1h to fix
-              let startDate = new Date(date.getTime() + 3600000);
+              const startDate = new Date(date);
               const endDate = new Date(startDate.getTime() + duration);
               
               busyBlocks.push({
@@ -120,16 +119,22 @@ app.get("/busy.ics", async (req, res) => {
     // Sort by start time
     busyBlocks.sort((a, b) => a.start.getTime() - b.start.getTime());
 
+    // Helper to format date as local time (without UTC conversion)
+    const formatLocalTime = (date) => {
+      const pad = (n) => n.toString().padStart(2, '0');
+      return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`;
+    };
+
     // Generate VEVENT entries
     for (const block of busyBlocks) {
-      const dtStart = block.start.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-      const dtEnd = block.end.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      const dtStart = formatLocalTime(block.start);
+      const dtEnd = formatLocalTime(block.end);
 
       busyIcs += "BEGIN:VEVENT\r\n";
       busyIcs += `UID:busy-${eventCount++}-${block.uid}@busy-proxy\r\n`;
       busyIcs += `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z\r\n`;
-      busyIcs += `DTSTART:${dtStart}\r\n`;
-      busyIcs += `DTEND:${dtEnd}\r\n`;
+      busyIcs += `DTSTART;TZID=Europe/Berlin:${dtStart}\r\n`;
+      busyIcs += `DTEND;TZID=Europe/Berlin:${dtEnd}\r\n`;
       busyIcs += "SUMMARY:Busy\r\n";
       busyIcs += "TRANSP:OPAQUE\r\n";
       busyIcs += "CLASS:PRIVATE\r\n";
