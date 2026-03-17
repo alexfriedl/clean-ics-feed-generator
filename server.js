@@ -86,8 +86,19 @@ app.get("/busy.ics", async (req, res) => {
             
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
-              
-              const startDate = new Date(date);
+
+              // node-ical's rrule.between() returns dates that need timezone adjustment
+              // The dates represent local time but are stored as if they were UTC
+              // We need to subtract the timezone offset to get correct UTC times
+              let startDate = new Date(date);
+
+              if (event.start && event.start.tz === 'Europe/Berlin') {
+                // Get the actual offset for this specific date (handles DST correctly)
+                const offsetMs = startDate.getTimezoneOffset() === 0 ?
+                  (startDate.getMonth() >= 2 && startDate.getMonth() <= 9 ? 2 : 1) * 3600000 : 0;
+                startDate = new Date(startDate.getTime() - offsetMs);
+              }
+
               const endDate = new Date(startDate.getTime() + duration);
               
               busyBlocks.push({
