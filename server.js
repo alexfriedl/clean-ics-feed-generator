@@ -87,8 +87,8 @@ app.get("/busy.ics", async (req, res) => {
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
 
-              // Add 2h to compensate for node-ical's rrule timezone handling
-              const startDate = new Date(date.getTime() + 2 * 3600000);
+              // Add 1h to compensate for node-ical's rrule timezone handling (CET = UTC+1)
+              const startDate = new Date(date.getTime() + 1 * 3600000);
               const endDate = new Date(startDate.getTime() + duration);
               
               busyBlocks.push({
@@ -101,9 +101,9 @@ app.get("/busy.ics", async (req, res) => {
             console.error('Error processing recurring event:', e);
           }
         } else if (event.start) {
-          // Regular single event
-          const startDate = new Date(event.start);
-          const endDate = new Date(event.end || event.start);
+          // Regular single event - subtract 1h to get correct Berlin time
+          const startDate = new Date(event.start.getTime() - 1 * 3600000);
+          const endDate = new Date(event.end ? event.end.getTime() - 1 * 3600000 : startDate.getTime());
 
           // Only include if within our time window (from start of week to 8 weeks out)
           if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
