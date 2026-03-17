@@ -119,9 +119,21 @@ app.get("/busy.ics", async (req, res) => {
           }
         } else if (event.start) {
           // Regular single event
-          const startDate = new Date(event.start);
-          const endDate = new Date(event.end || event.start);
-          
+          let startDate = new Date(event.start);
+
+          // Apply same timezone compensation as for recurring events
+          if (process.env.TZ === 'UTC' || new Date().getTimezoneOffset() === 0) {
+            if (event.start && event.start.tz === 'Europe/Berlin') {
+              const month = startDate.getMonth();
+              const isSummerTime = month >= 2 && month <= 9;
+              const hoursToAdd = isSummerTime ? 2 : 1;
+              startDate = new Date(startDate.getTime() + hoursToAdd * 3600000);
+            }
+          }
+
+          const duration = event.end ? new Date(event.end).getTime() - new Date(event.start).getTime() : 3600000;
+          const endDate = new Date(startDate.getTime() + duration);
+
           // Only include if within our time window (from start of week to 8 weeks out)
           if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
             busyBlocks.push({
