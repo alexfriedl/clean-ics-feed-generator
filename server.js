@@ -87,25 +87,7 @@ app.get("/busy.ics", async (req, res) => {
             for (const date of dates) {
               const duration = event.end ? event.end.getTime() - event.start.getTime() : 3600000; // 1 hour default
               
-              // BUG FIX: When running in UTC timezone (e.g., on Heroku), node-ical's RRULE
-              // expansion returns dates that are offset by the timezone difference.
-              // For Europe/Berlin events, this is typically -2 hours during summer time.
-              // We need to detect and compensate for this.
-              let startDate = new Date(date);
-              
-              // Check if we're running in UTC and the event has a timezone
-              if (process.env.TZ === 'UTC' || new Date().getTimezoneOffset() === 0) {
-                if (event.start && event.start.tz === 'Europe/Berlin') {
-                  // During CEST (summer time), Berlin is UTC+2
-                  // During CET (winter time), Berlin is UTC+1
-                  // The RRULE expansion seems to be off by this amount
-                  const month = startDate.getMonth();
-                  const isSummerTime = month >= 2 && month <= 9; // Rough approximation
-                  const hoursToAdd = isSummerTime ? 2 : 1;
-                  startDate = new Date(startDate.getTime() + hoursToAdd * 3600000);
-                }
-              }
-              
+              const startDate = new Date(date);
               const endDate = new Date(startDate.getTime() + duration);
               
               busyBlocks.push({
@@ -119,20 +101,8 @@ app.get("/busy.ics", async (req, res) => {
           }
         } else if (event.start) {
           // Regular single event
-          let startDate = new Date(event.start);
-
-          // Apply same timezone compensation as for recurring events
-          if (process.env.TZ === 'UTC' || new Date().getTimezoneOffset() === 0) {
-            if (event.start && event.start.tz === 'Europe/Berlin') {
-              const month = startDate.getMonth();
-              const isSummerTime = month >= 2 && month <= 9;
-              const hoursToAdd = isSummerTime ? 2 : 1;
-              startDate = new Date(startDate.getTime() + hoursToAdd * 3600000);
-            }
-          }
-
-          const duration = event.end ? new Date(event.end).getTime() - new Date(event.start).getTime() : 3600000;
-          const endDate = new Date(startDate.getTime() + duration);
+          const startDate = new Date(event.start);
+          const endDate = new Date(event.end || event.start);
 
           // Only include if within our time window (from start of week to 8 weeks out)
           if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
