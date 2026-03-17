@@ -37,24 +37,52 @@ app.use((req, res, next) => {
 // Main endpoint - parse external ICS and return only busy blocks
 app.get("/busy.ics", async (req, res) => {
   try {
-    const sourceUrl = req.query.url || process.env.SOURCE_ICS_URL;
+    // Support multiple comma-separated ICS URLs
+    const sourceUrlsRaw = req.query.url || process.env.SOURCE_ICS_URL;
 
-    if (!sourceUrl) {
+    if (!sourceUrlsRaw) {
       return res.status(400).send("Missing source ICS URL");
     }
 
-    // Fetch the source ICS
-    const response = await fetch(sourceUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ICS: ${response.status}`);
+    const sourceUrls = sourceUrlsRaw
+      .split(',')
+      .map(url => url.trim())
+      .filter(url => url.length > 0);
+
+    // Fetch all calendars in parallel
+    const fetchResults = await Promise.all(
+      sourceUrls.map(async (url) => {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) {
+            console.error(`Failed to fetch ICS from ${url}: ${response.status}`);
+            return null;
+          }
+          return await response.text();
+        } catch (err) {
+          console.error(`Error fetching ${url}:`, err.message);
+          return null;
+        }
+      })
+    );
+
+    // Filter out failed fetches
+    const icsDataList = fetchResults.filter(data => data !== null);
+
+    if (icsDataList.length === 0) {
+      throw new Error("Failed to fetch any calendar data");
     }
 
-    const icsData = await response.text();
+    // Collect all events from all calendars
+    let allVevents = [];
+    for (const icsData of icsDataList) {
+      const jcalData = ICAL.parse(icsData);
+      const vcalendar = new ICAL.Component(jcalData);
+      const vevents = vcalendar.getAllSubcomponents('vevent');
+      allVevents = allVevents.concat(vevents);
+    }
 
-    // Parse with ical.js - handles timezones correctly
-    const jcalData = ICAL.parse(icsData);
-    const vcalendar = new ICAL.Component(jcalData);
-    const vevents = vcalendar.getAllSubcomponents('vevent');
+    const vevents = allVevents;
 
     // Time window
     const now = new Date();
