@@ -11,6 +11,7 @@
     "express": "^4.19.2",
     "ical.js": "^2.2.1",
     "node-fetch": "^3.3.2",
-    "node-ical": "^0.17.1"
+    "node-ical": "^0.17.1",
+    "nodemailer": "^6.9.0"
   }
 }

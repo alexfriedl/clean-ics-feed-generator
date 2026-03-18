@@ -4,6 +4,7 @@ import ICAL from "ical.js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from 'url';
+import nodemailer from "nodemailer";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -395,6 +396,49 @@ app.get("/busy.ics", async (req, res) => {
   } catch (error) {
     console.error("Error:", error);
     res.status(500).send("Error generating busy calendar");
+  }
+});
+
+// JSON body parsing for mail endpoint
+app.use(express.json());
+
+// Mail relay endpoint
+app.post("/api/send-mail", async (req, res) => {
+  try {
+    const MAIL_KEY = process.env.MAIL_KEY;
+    if (!MAIL_KEY || req.headers["x-mail-key"] !== MAIL_KEY) {
+      console.error("[MAIL] Unauthorized request");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const { to, subject, html } = req.body;
+
+    if (!to || !subject || !html) {
+      return res.status(400).json({ error: "Missing required fields: to, subject, html" });
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587", 10),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    const result = await transporter.sendMail({
+      from: process.env.SMTP_FROM || "bookings@alexfriedl.com",
+      to,
+      subject,
+      html,
+    });
+
+    console.log(`[MAIL] Sent to=${to} subject="${subject}" messageId=${result.messageId}`);
+    res.json({ success: true, messageId: result.messageId });
+  } catch (error) {
+    console.error("[MAIL] Error:", error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
