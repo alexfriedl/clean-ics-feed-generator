@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from 'url';
 import nodemailer from "nodemailer";
+import { google } from "googleapis";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,33 +21,106 @@ app.use((req, res, next) => {
   next();
 });
 
-// Helper: fetch and parse all calendar events
-async function fetchAllEvents() {
+// Helper: Google Calendar API client
+function getGoogleCalendarClient() {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+
+  if (!email || !key || !calendarId) return null;
+
+  const auth = new google.auth.GoogleAuth({
+    credentials: { client_email: email, private_key: key },
+    scopes: ['https://www.googleapis.com/auth/calendar.readonly'],
+  });
+
+  return { calendar: google.calendar({ version: 'v3', auth }), calendarId };
+}
+
+// Helper: fetch events from Google Calendar API (includes forwarded events)
+async function fetchGoogleApiEvents(start, end) {
+  const client = getGoogleCalendarClient();
+  if (!client) {
+    console.log('[DEBUG] Google Calendar API not configured, skipping');
+    return [];
+  }
+
+  try {
+    const events = [];
+    let pageToken;
+
+    do {
+      const response = await client.calendar.events.list({
+        calendarId: client.calendarId,
+        timeMin: start.toISOString(),
+        timeMax: end.toISOString(),
+        singleEvents: true, // expands recurring events
+        orderBy: 'startTime',
+        maxResults: 2500,
+        pageToken,
+      });
+
+      for (const item of (response.data.items || [])) {
+        // Skip cancelled events
+        if (item.status === 'cancelled') continue;
+        // Skip declined events
+        const selfAttendee = item.attendees?.find(a => a.self);
+        if (selfAttendee?.responseStatus === 'declined') continue;
+
+        const eventStart = item.start?.dateTime
+          ? new Date(item.start.dateTime)
+          : item.start?.date ? new Date(item.start.date) : null;
+        const eventEnd = item.end?.dateTime
+          ? new Date(item.end.dateTime)
+          : item.end?.date ? new Date(item.end.date) : null;
+
+        if (!eventStart || !eventEnd) continue;
+
+        events.push({
+          start: eventStart,
+          end: eventEnd,
+          summary: item.summary || '',
+          uid: `gapi-${item.id}`,
+          source: 'google-api',
+        });
+      }
+
+      pageToken = response.data.nextPageToken;
+    } while (pageToken);
+
+    console.log(`[DEBUG] Google Calendar API returned ${events.length} events`);
+    return events;
+  } catch (err) {
+    console.error('[DEBUG] Google Calendar API error:', err.message);
+    return [];
+  }
+}
+
+// Helper: fetch and parse all calendar events from ICS sources
+async function fetchIcsVevents() {
   const sourceUrlsRaw = process.env.SOURCE_ICS_URL;
-  if (!sourceUrlsRaw) throw new Error("Missing SOURCE_ICS_URL");
+  if (!sourceUrlsRaw) return [];
 
   const sourceUrls = sourceUrlsRaw.split(',').map(u => u.trim()).filter(u => u.length > 0);
-  console.log(`[DEBUG] Fetching ${sourceUrls.length} calendar sources`);
+  console.log(`[DEBUG] Fetching ${sourceUrls.length} ICS sources`);
 
   const fetchResults = await Promise.all(
     sourceUrls.map(async (url, i) => {
       try {
         const response = await fetch(url);
-        console.log(`[DEBUG] Source ${i}: status=${response.status} url=${url.substring(0, 60)}...`);
+        console.log(`[DEBUG] ICS Source ${i}: status=${response.status} url=${url.substring(0, 60)}...`);
         if (!response.ok) return null;
         const text = await response.text();
-        console.log(`[DEBUG] Source ${i}: ${text.length} bytes, contains ${(text.match(/BEGIN:VEVENT/g) || []).length} VEVENTs`);
+        console.log(`[DEBUG] ICS Source ${i}: ${text.length} bytes, contains ${(text.match(/BEGIN:VEVENT/g) || []).length} VEVENTs`);
         return text;
       } catch (err) {
-        console.error(`[DEBUG] Source ${i} error:`, err.message);
+        console.error(`[DEBUG] ICS Source ${i} error:`, err.message);
         return null;
       }
     })
   );
 
   const icsDataList = fetchResults.filter(d => d !== null);
-  if (icsDataList.length === 0) throw new Error("Failed to fetch any calendar data");
-
   let allVevents = [];
   for (const icsData of icsDataList) {
     const jcalData = ICAL.parse(icsData);
@@ -54,8 +128,30 @@ async function fetchAllEvents() {
     const vevents = vcalendar.getAllSubcomponents('vevent');
     allVevents = allVevents.concat(vevents);
   }
-  console.log(`[DEBUG] Total parsed vevents: ${allVevents.length}`);
+  console.log(`[DEBUG] Total parsed ICS vevents: ${allVevents.length}`);
   return allVevents;
+}
+
+// Helper: deduplicate events by overlapping time (same start+end = duplicate)
+function deduplicateEvents(events) {
+  const seen = new Map();
+  for (const event of events) {
+    const key = `${event.start.getTime()}-${event.end.getTime()}`;
+    // Prefer google-api source (has forwarded events)
+    if (!seen.has(key) || event.source === 'google-api') {
+      seen.set(key, event);
+    }
+  }
+  return Array.from(seen.values());
+}
+
+// Helper: fetch and parse all calendar events (ICS + Google API)
+async function fetchAllEvents() {
+  const vevents = await fetchIcsVevents();
+  if (vevents.length === 0 && !getGoogleCalendarClient()) {
+    throw new Error("No calendar sources configured");
+  }
+  return vevents;
 }
 
 // Helper: get time range from query param
@@ -97,8 +193,8 @@ function getTimeRange(range) {
   return { start, end };
 }
 
-// Helper: expand events into occurrences within a time range
-function expandEvents(vevents, start, end) {
+// Helper: expand ICS events into occurrences within a time range
+function expandIcsEvents(vevents, start, end) {
   const events = [];
   for (const vevent of vevents) {
     const event = new ICAL.Event(vevent);
@@ -122,7 +218,8 @@ function expandEvents(vevents, start, end) {
           start: occStart,
           end: occEnd,
           summary: event.summary || '',
-          uid: `${event.uid}-${occStart.getTime()}`
+          uid: `${event.uid}-${occStart.getTime()}`,
+          source: 'ics',
         });
         count++;
       }
@@ -135,13 +232,27 @@ function expandEvents(vevents, start, end) {
           start: startDate,
           end: endDate,
           summary: event.summary || '',
-          uid: event.uid
+          uid: event.uid,
+          source: 'ics',
         });
       }
     }
   }
-  events.sort((a, b) => a.start.getTime() - b.start.getTime());
   return events;
+}
+
+// Helper: get all events from all sources, expanded and deduplicated
+async function getAllExpandedEvents(start, end) {
+  const vevents = await fetchIcsVevents();
+  const icsEvents = expandIcsEvents(vevents, start, end);
+  const googleEvents = await fetchGoogleApiEvents(start, end);
+
+  const allEvents = [...icsEvents, ...googleEvents];
+  const deduplicated = deduplicateEvents(allEvents);
+  deduplicated.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  console.log(`[DEBUG] Combined: ${icsEvents.length} ICS + ${googleEvents.length} Google API = ${allEvents.length} total, ${deduplicated.length} after dedup`);
+  return deduplicated;
 }
 
 // API: original events (with details) as JSON
@@ -150,13 +261,12 @@ app.get('/api/original', async (req, res) => {
     const FEED_KEY = process.env.FEED_KEY;
     if (FEED_KEY && req.query.key !== FEED_KEY) return res.status(403).json({ error: 'Forbidden' });
 
-    const vevents = await fetchAllEvents();
     const { start, end } = getTimeRange(req.query.range);
-    const events = expandEvents(vevents, start, end);
+    const events = await getAllExpandedEvents(start, end);
 
     console.log(`[DEBUG] /api/original range=${req.query.range} start=${start.toISOString()} end=${end.toISOString()} events=${events.length}`);
     events.slice(0, 5).forEach((e, i) => {
-      console.log(`[DEBUG]   event[${i}]: start=${e.start.toISOString()} end=${e.end.toISOString()} summary="${e.summary}"`);
+      console.log(`[DEBUG]   event[${i}]: start=${e.start.toISOString()} end=${e.end.toISOString()} summary="${e.summary}" source=${e.source}`);
     });
 
     res.json({
@@ -180,9 +290,8 @@ app.get('/api/busy', async (req, res) => {
     const FEED_KEY = process.env.FEED_KEY;
     if (FEED_KEY && req.query.key !== FEED_KEY) return res.status(403).json({ error: 'Forbidden' });
 
-    const vevents = await fetchAllEvents();
     const { start, end } = getTimeRange(req.query.range);
-    const events = expandEvents(vevents, start, end);
+    const events = await getAllExpandedEvents(start, end);
 
     const formatBerlinTime = (date) => {
       const options = { timeZone: 'Europe/Berlin', hour: 'numeric', minute: '2-digit', hour12: true };
@@ -191,7 +300,7 @@ app.get('/api/busy', async (req, res) => {
 
     console.log(`[DEBUG] /api/busy range=${req.query.range} start=${start.toISOString()} end=${end.toISOString()} events=${events.length}`);
     events.slice(0, 5).forEach((e, i) => {
-      console.log(`[DEBUG]   busy[${i}]: start=${e.start.toISOString()} berlin=${formatBerlinTime(e.start)} end=${e.end.toISOString()} berlin=${formatBerlinTime(e.end)}`);
+      console.log(`[DEBUG]   busy[${i}]: start=${e.start.toISOString()} berlin=${formatBerlinTime(e.start)} end=${e.end.toISOString()} berlin=${formatBerlinTime(e.end)} source=${e.source}`);
     });
 
     res.json({
@@ -233,53 +342,6 @@ app.use((req, res, next) => {
 // Main endpoint - parse external ICS and return only busy blocks
 app.get("/busy.ics", async (req, res) => {
   try {
-    // Support multiple comma-separated ICS URLs
-    const sourceUrlsRaw = req.query.url || process.env.SOURCE_ICS_URL;
-
-    if (!sourceUrlsRaw) {
-      return res.status(400).send("Missing source ICS URL");
-    }
-
-    const sourceUrls = sourceUrlsRaw
-      .split(',')
-      .map(url => url.trim())
-      .filter(url => url.length > 0);
-
-    // Fetch all calendars in parallel
-    const fetchResults = await Promise.all(
-      sourceUrls.map(async (url) => {
-        try {
-          const response = await fetch(url);
-          if (!response.ok) {
-            console.error(`Failed to fetch ICS from ${url}: ${response.status}`);
-            return null;
-          }
-          return await response.text();
-        } catch (err) {
-          console.error(`Error fetching ${url}:`, err.message);
-          return null;
-        }
-      })
-    );
-
-    // Filter out failed fetches
-    const icsDataList = fetchResults.filter(data => data !== null);
-
-    if (icsDataList.length === 0) {
-      throw new Error("Failed to fetch any calendar data");
-    }
-
-    // Collect all events from all calendars
-    let allVevents = [];
-    for (const icsData of icsDataList) {
-      const jcalData = ICAL.parse(icsData);
-      const vcalendar = new ICAL.Component(jcalData);
-      const vevents = vcalendar.getAllSubcomponents('vevent');
-      allVevents = allVevents.concat(vevents);
-    }
-
-    const vevents = allVevents;
-
     // Time window
     const now = new Date();
     const startOfWeek = new Date(now);
@@ -289,59 +351,8 @@ app.get("/busy.ics", async (req, res) => {
 
     const eightWeeksFromNow = new Date(now.getTime() + (8 * 7 * 24 * 60 * 60 * 1000));
 
-    let busyBlocks = [];
-
-    for (const vevent of vevents) {
-      const event = new ICAL.Event(vevent);
-
-      // Check for recurring events
-      if (event.isRecurring()) {
-        const expand = event.iterator();
-        let next;
-        let count = 0;
-        const maxOccurrences = 100; // Safety limit
-
-        while ((next = expand.next()) && count < maxOccurrences) {
-          const occurrenceStart = next.toJSDate();
-
-          if (occurrenceStart > eightWeeksFromNow) break;
-          if (occurrenceStart < startOfWeek) {
-            count++;
-            continue;
-          }
-
-          const duration = event.duration;
-          const durationMs = duration ?
-            (duration.days * 86400000 + duration.hours * 3600000 + duration.minutes * 60000 + duration.seconds * 1000) :
-            3600000;
-
-          const occurrenceEnd = new Date(occurrenceStart.getTime() + durationMs);
-
-          busyBlocks.push({
-            start: occurrenceStart,
-            end: occurrenceEnd,
-            uid: `${event.uid}-${occurrenceStart.getTime()}`
-          });
-
-          count++;
-        }
-      } else {
-        // Single event
-        const startDate = event.startDate.toJSDate();
-        const endDate = event.endDate ? event.endDate.toJSDate() : startDate;
-
-        if (endDate >= startOfWeek && startDate < eightWeeksFromNow) {
-          busyBlocks.push({
-            start: startDate,
-            end: endDate,
-            uid: event.uid
-          });
-        }
-      }
-    }
-
-    // Sort by start time
-    busyBlocks.sort((a, b) => a.start.getTime() - b.start.getTime());
+    // Use combined sources (ICS + Google API)
+    const busyBlocks = await getAllExpandedEvents(startOfWeek, eightWeeksFromNow);
 
     // Build ICS output
     let busyIcs = "";
